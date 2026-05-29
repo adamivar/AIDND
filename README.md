@@ -45,7 +45,13 @@ Copy the template and fill in your Anthropic API key:
 cp .env.template .env
 ```
 
-Then open `.env` and replace `your_api_key_here` with your actual key.
+Then open `.env` and replace `your_api_key_here` with your actual key:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Get a key at [https://console.anthropic.com/](https://console.anthropic.com/) — sign up, go to **API Keys**, and create a new key. The `.env` file is gitignored and will never be committed.
 
 > You can get a key from [https://console.anthropic.com/](https://console.anthropic.com/)
 
