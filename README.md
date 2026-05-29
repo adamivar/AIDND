@@ -39,11 +39,13 @@ py -3.12 -m pip install pygame anthropic python-dotenv wonderwords
 
 ### 3. Add your API key
 
-Create a file called `.env` in the project folder and add your Anthropic API key:
+Copy the template and fill in your Anthropic API key:
 
+```bash
+cp .env.template .env
 ```
-ANTHROPIC_API_KEY=your_api_key_here
-```
+
+Then open `.env` and replace `your_api_key_here` with your actual key.
 
 > You can get a key from [https://console.anthropic.com/](https://console.anthropic.com/)
 
