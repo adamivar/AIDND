@@ -2,13 +2,13 @@
 
 A Pygame-based text RPG where Claude AI acts as your Dungeon Master. Describe actions, roll dice, manage your party, and explore a fully AI-generated world.
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue) ![Pygame](https://img.shields.io/badge/Pygame-required-green) ![Claude](https://img.shields.io/badge/Powered%20by-Claude%20AI-orange)
+![Python](https://img.shields.io/badge/Python-3.12-blue) ![Pygame](https://img.shields.io/badge/Pygame-required-green) ![Claude](https://img.shields.io/badge/Powered%20by-Claude%20AI-orange)
 
 ---
 
 ## Requirements
 
-- Python 3.10 or newer
+- Python 3.12
 - An [Anthropic API key](https://console.anthropic.com/)
 
 ---
@@ -24,8 +24,17 @@ cd AIDND
 
 ### 2. Install dependencies
 
+If you have Python 3.12:
+
 ```bash
 pip install pygame anthropic python-dotenv wonderwords
+```
+
+If you installed Python via the Microsoft Store or have Python 3.14, use the `py` launcher:
+
+```bash
+py install 3.12
+py -3.12 -m pip install pygame anthropic python-dotenv wonderwords
 ```
 
 ### 3. Add your API key
@@ -40,8 +49,16 @@ ANTHROPIC_API_KEY=your_api_key_here
 
 ### 4. Run the game
 
+Standard:
+
 ```bash
 python main.py
+```
+
+If using `py` launcher with 3.12:
+
+```bash
+py -3.12 main.py
 ```
 
 ---
@@ -112,3 +129,4 @@ AIDND/
 - The game uses `claude-haiku-4-5` by default and automatically falls back to Sonnet or Opus if the model is overloaded
 - API usage will count against your Anthropic account — each turn makes at least one API call
 - The `.env` file is gitignored and will never be committed
+- `pygame 2.6.1` does not support Python 3.14 on Windows — use Python 3.12 instead
