@@ -323,7 +323,7 @@ def draw_setup_screen(screen, window_size, setup_fields, setup_active_idx):
 
     box_w = 400
     box_h = 40
-    start_y = 130
+    start_y = 155
     gap = 55
     center_x = window_size[0] // 2 - box_w // 2
 
