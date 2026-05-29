@@ -2,6 +2,9 @@
 
 A Pygame-based text RPG where Claude AI acts as your Dungeon Master. Describe actions, roll dice, manage your party, and explore a fully AI-generated world.
 
+![Setup Screen](screenshots/setup.png)
+![Gameplay](screenshots/gameplay.png)
+
 ![Python](https://img.shields.io/badge/Python-3.12-blue) ![Pygame](https://img.shields.io/badge/Pygame-required-green) ![Claude](https://img.shields.io/badge/Powered%20by-Claude%20AI-orange)
 
 ---
