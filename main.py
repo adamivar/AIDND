@@ -9,6 +9,31 @@ import anthropic
 from dotenv import load_dotenv
 from wonderwords import RandomWord
 
+try:
+    import pyperclip
+except Exception:
+    pyperclip = None
+
+
+def _clipboard_get():
+    """Return clipboard text, or '' if unavailable."""
+    if pyperclip is None:
+        return ""
+    try:
+        return pyperclip.paste() or ""
+    except Exception:
+        return ""
+
+
+def _clipboard_set(text):
+    """Copy text to the clipboard; silently no-op if unavailable."""
+    if pyperclip is None:
+        return
+    try:
+        pyperclip.copy(text)
+    except Exception:
+        pass
+
 from config import (
     WINDOW_SIZE, WINDOW_TITLE, TARGET_FPS,
     MODEL_NAME, FALLBACK_MODELS,
@@ -1149,7 +1174,14 @@ while active:
                         else:
                             api_key_error = init_error or "Failed to initialise client."
             elif event.type == pygame.KEYDOWN and api_key_active:
-                if event.key == pygame.K_RETURN:
+                mods = pygame.key.get_mods()
+                ctrl = mods & pygame.KMOD_CTRL
+                if ctrl and event.key == pygame.K_v:
+                    api_key_input += "".join(_clipboard_get().split())
+                    api_key_error = ""
+                elif ctrl and event.key == pygame.K_c:
+                    _clipboard_set(api_key_input)
+                elif event.key == pygame.K_RETURN:
                     key = api_key_input.strip()
                     if not key.startswith("sk-ant-"):
                         api_key_error = "Key must start with 'sk-ant-'  —  check console.anthropic.com"
@@ -1201,10 +1233,18 @@ while active:
 
             elif event.type == pygame.KEYDOWN:
                 if setup_active_idx is not None:
-                    if event.key == pygame.K_BACKSPACE:
-                        setup_fields[setup_active_idx]["text"] = setup_fields[setup_active_idx]["text"][:-1]
-                    elif event.unicode.isprintable() and len(setup_fields[setup_active_idx]["text"]) < SETUP_FIELD_MAX_LENGTH:
-                        setup_fields[setup_active_idx]["text"] += event.unicode
+                    mods = pygame.key.get_mods()
+                    ctrl = mods & pygame.KMOD_CTRL
+                    fld = setup_fields[setup_active_idx]
+                    if ctrl and event.key == pygame.K_v:
+                        pasted = " ".join(_clipboard_get().split())
+                        fld["text"] = (fld["text"] + pasted)[:SETUP_FIELD_MAX_LENGTH]
+                    elif ctrl and event.key == pygame.K_c:
+                        _clipboard_set(fld["text"])
+                    elif event.key == pygame.K_BACKSPACE:
+                        fld["text"] = fld["text"][:-1]
+                    elif event.unicode.isprintable() and len(fld["text"]) < SETUP_FIELD_MAX_LENGTH:
+                        fld["text"] += event.unicode
 
         elif game_state == "playing":
             if event.type == pygame.MOUSEBUTTONDOWN:
@@ -1253,6 +1293,11 @@ while active:
 
                 if ctrl and event.key == pygame.K_s:
                     save_game()
+                elif ctrl and event.key == pygame.K_v:
+                    pasted = " ".join(_clipboard_get().split())
+                    input_text = (input_text + pasted)[:INPUT_MAX_LENGTH]
+                elif ctrl and event.key == pygame.K_c:
+                    _clipboard_set(input_text)
                 elif event.key == pygame.K_UP:
                     with state_lock:
                         total = len(all_lines)

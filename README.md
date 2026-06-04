@@ -30,14 +30,14 @@ cd AIDND
 If you have Python 3.12:
 
 ```bash
-pip install pygame anthropic python-dotenv wonderwords
+pip install pygame anthropic python-dotenv wonderwords pyperclip
 ```
 
 If you installed Python via the Microsoft Store or have Python 3.14, use the `py` launcher:
 
 ```bash
 py install 3.12
-py -3.12 -m pip install pygame anthropic python-dotenv wonderwords
+py -3.12 -m pip install pygame anthropic python-dotenv wonderwords pyperclip
 ```
 
 ### 3. Add your API key
