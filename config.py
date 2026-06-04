@@ -25,7 +25,10 @@ RETRY_JITTER = 0.75     # random jitter ceiling added to wait
 SAVE_PATH = "savegame.json"
 
 # ── Game Logic ────────────────────────────────────────────────────────────────
-HISTORY_WINDOW = 24          # number of recent messages kept per request
+HISTORY_WINDOW = 24          # number of recent messages kept verbatim per request
+SUMMARY_KEEP_VERBATIM = HISTORY_WINDOW  # recent messages always sent raw (rest summarized)
+SUMMARY_BATCH = 8            # summarize only once this many messages have aged out
+SUMMARY_MAX_TOKENS = 600     # max tokens for the rolling "story so far" summary
 SEED_MAX_ATTEMPTS = 6        # retries for world-seed generation
 SEED_WAIT_BASE = 1.5         # seconds between seed-gen retries
 SEED_WAIT_MAX = 5.0          # max wait between seed-gen retries

@@ -262,6 +262,59 @@ def build_dynamic_prompt(active_tone, cur_hp, cur_max, inv_str,
     )
 
 
+def build_static_system(party_identity_str, abilities_lore_str):
+    """The stable, cacheable portion of the system prompt.
+
+    Contains the rules plus the party's fixed identities and the ability
+    lore — none of which change during a session, so this block is sent
+    with a cache breakpoint and re-read from cache on every call.
+    """
+    return (
+        f"{BASE_SYSTEM_PROMPT}\n"
+        f"PARTY (fixed identities — PRIVATE DM reference, never recited verbatim):\n"
+        f"{party_identity_str}\n"
+        f"ABILITIES (fixed lore):\n{abilities_lore_str}\n"
+    )
+
+
+def build_dynamic_system(active_tone, cur_hp, cur_max, inv_str,
+                         abilities_state_str, party_state_str, story_summary):
+    """The small, volatile portion of the system prompt (not cached)."""
+    parts = [f"STORY TONE: {active_tone}"]
+    if story_summary and story_summary.strip():
+        parts.append("STORY SO FAR (memory of earlier events you must stay consistent with):\n"
+                     + story_summary.strip())
+    parts.append(
+        "CURRENT STATE:\n"
+        f"- HP: {cur_hp}/{cur_max}\n"
+        f"- Inventory: [{inv_str}]\n"
+        f"- Abilities (cooldowns): [{abilities_state_str}]\n"
+        f"- Party (current status):\n{party_state_str}"
+    )
+    return "\n\n".join(parts)
+
+
+def build_summary_prompt(prev_summary, transcript):
+    """Build the prompt that folds aged-out turns into the running memory."""
+    prior = (
+        f"EXISTING MEMORY (preserve everything still relevant):\n{prev_summary.strip()}\n\n"
+        if prev_summary and prev_summary.strip() else ""
+    )
+    return (
+        "You maintain a running memory for an ongoing text RPG so the Dungeon "
+        "Master never forgets important earlier events.\n\n"
+        f"{prior}"
+        "NEW EVENTS to fold into the memory:\n"
+        f"{transcript}\n\n"
+        "Produce an UPDATED memory as terse bullet points (max ~200 words). "
+        "Preserve: key plot developments, the central quest/goal, locations, "
+        "important NPCs and how they relate to the player, promises/debts/"
+        "threats, party dynamics and any revealed secrets, and unresolved "
+        "threads. Drop trivial moment-to-moment chatter. Output ONLY the "
+        "updated memory, no preamble."
+    )
+
+
 def build_opening_prompt(seed):
     party_names = ", ".join(seed[f"party{i}_name"] for i in range(1, PARTY_SIZE + 1))
     return (

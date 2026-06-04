@@ -40,6 +40,7 @@ from config import (
     MAX_TOOL_ITERATIONS, API_MAX_RETRIES, RETRYABLE_STATUS,
     RETRY_BASE_WAIT, RETRY_MAX_WAIT, RETRY_JITTER,
     SAVE_PATH, HISTORY_WINDOW,
+    SUMMARY_KEEP_VERBATIM, SUMMARY_BATCH, SUMMARY_MAX_TOKENS,
     SEED_MAX_ATTEMPTS, SEED_WAIT_BASE, SEED_WAIT_MAX,
     STARTING_HP, PARTY_HP_MAX,
     STARTING_INVENTORY, DEFAULT_ITEM_DESCRIPTION, RATIONS_DESCRIPTION,
@@ -56,7 +57,9 @@ from prompts import (
     TOOLS,
     RECAP_INSTRUCTION,
     build_seed_prompt,
-    build_dynamic_prompt,
+    build_static_system,
+    build_dynamic_system,
+    build_summary_prompt,
     build_opening_prompt,
     build_auditor_prompt,
 )
@@ -227,6 +230,9 @@ party = []
 
 chat_history = []
 active_vibe = "neutral"
+story_summary = ""          # rolling "story so far" memory of aged-out turns
+summarized_upto = 0         # number of chat_history messages already summarized
+summary_lock = threading.Lock()
 all_lines = []
 scroll_y = 0
 
@@ -380,6 +386,102 @@ def log_output(text, color=(200, 200, 200)):
         for line in new_lines:
             all_lines.append(line)
 
+def _party_identity_str():
+    """Stable, cacheable party identity block. Caller must hold state_lock."""
+    out = ""
+    for m in party:
+        out += f"- {m['name']}\n"
+        out += f"  Desc: {m.get('desc', '')}\n"
+        out += f"  Personality (MBTI): {m.get('mbti', '')}\n"
+        out += f"  Alignment: {m.get('alignment', '')}\n"
+        out += f"  Character Flaw: {m.get('flaw', '')}\n"
+        out += f"  Love Language: {m.get('love_language', '')}\n"
+        out += f"  Public Motive: {m.get('public_motive', '')}\n"
+        out += f"  Secret Motive: {m.get('secret_motive', '')}\n"
+    return out or "(none)"
+
+def _abilities_lore_str():
+    """Stable, cacheable ability lore block. Caller must hold state_lock."""
+    out = ", ".join(
+        f"{k} ({v.get('type')}: {v.get('desc', '')})"
+        for k, v in abilities.items()
+    )
+    return out or "None"
+
+def _history_to_plaintext(msgs):
+    """Render messages to a compact transcript for the summarizer."""
+    lines = []
+    for m in msgs:
+        role = m.get("role")
+        content = m.get("content")
+        if role == "user":
+            if isinstance(content, list):
+                continue  # tool_result plumbing
+            text = str(content).strip()
+            if text:
+                lines.append(f"PLAYER: {text}")
+        elif role == "assistant":
+            if isinstance(content, list):
+                text = "\n".join(
+                    b.get("text", "") for b in content
+                    if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+                ).strip()
+            else:
+                text = str(content).strip()
+            if text:
+                lines.append(f"DM: {text}")
+    return "\n".join(lines)
+
+def maybe_update_summary():
+    """Fold aged-out turns into the rolling story summary (background thread).
+
+    Runs only when enough messages have scrolled past the verbatim window,
+    so it batches work and never blocks player input.
+    """
+    global story_summary, summarized_upto
+    if client is None:
+        return
+    if not summary_lock.acquire(blocking=False):
+        return
+    try:
+        with state_lock:
+            total = len(chat_history)
+            cutoff = total - SUMMARY_KEEP_VERBATIM
+            if cutoff - summarized_upto < SUMMARY_BATCH:
+                return
+            new_msgs = list(chat_history[summarized_upto:cutoff])
+            prev = story_summary
+
+        transcript = _history_to_plaintext(new_msgs)
+        if not transcript.strip():
+            with state_lock:
+                summarized_upto = max(summarized_upto, cutoff)
+            return
+
+        prompt = build_summary_prompt(prev, transcript)
+        if debug_mode:
+            _dbg_sent("SUMMARY", None, [{"role": "user", "content": prompt}])
+
+        resp = _call_with_retry(
+            "SUMMARY",
+            max_tokens=SUMMARY_MAX_TOKENS,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        if debug_mode:
+            _dbg_received("SUMMARY", resp)
+
+        new_summary = _extract_text(resp.content).strip()
+        if new_summary:
+            with state_lock:
+                story_summary = new_summary
+                summarized_upto = max(summarized_upto, cutoff)
+    except Exception as exc:
+        if debug_mode:
+            print(f"\n[AI-DEBUG] SUMMARY failed: {exc}")
+    finally:
+        summary_lock.release()
+
 def save_game():
     with state_lock:
         data = {
@@ -391,6 +493,8 @@ def save_game():
             "item_descriptions": item_descriptions,
             "party": party,
             "active_vibe": active_vibe,
+            "story_summary": story_summary,
+            "summarized_upto": summarized_upto,
             "chat_history": _serialize_history(chat_history),
         }
     try:
@@ -457,27 +561,65 @@ def _serialize_history(history):
     return out
 
 def _trim_history_for_request(history):
-    if len(history) <= HISTORY_WINDOW:
-        return list(history)
-    window = history[-HISTORY_WINDOW:]
-    start = 0
-    for i, msg in enumerate(window):
-        if msg.get("role") != "user":
-            continue
-        content = msg.get("content")
-        is_tool_result = (
-                isinstance(content, list)
-                and any(isinstance(b, dict) and b.get("type") == "tool_result"
-                        for b in content)
-        )
-        if not is_tool_result:
-            start = i
+    """Build the message list to send: a recent window with the tool
+    plumbing of *completed* turns stripped out.
+
+    Completed turns keep only the DM's narration text; their tool_use /
+    tool_result blocks are dropped (as matched pairs) since they carry
+    little narrative value but consume window slots and tokens. The
+    in-progress turn (everything from the most recent player action
+    onward) is kept verbatim so the model can still see its own tool
+    results and continue the loop.
+    """
+    window = history[-HISTORY_WINDOW:] if len(history) > HISTORY_WINDOW else list(history)
+
+    # Boundary = start of the in-progress turn = the latest plain-text user msg.
+    boundary = len(window)
+    for i in range(len(window) - 1, -1, -1):
+        m = window[i]
+        if m.get("role") == "user" and isinstance(m.get("content"), str):
+            boundary = i
             break
-    return window[start:]
+    prefix, current = window[:boundary], window[boundary:]
+
+    stripped = []
+    for m in prefix:
+        role = m.get("role")
+        content = m.get("content")
+        if role == "assistant":
+            if isinstance(content, list):
+                text = "\n\n".join(
+                    b.get("text", "") for b in content
+                    if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+                ).strip()
+            else:
+                text = str(content).strip()
+            if text:
+                stripped.append({"role": "assistant", "content": text})
+        else:  # user
+            if isinstance(content, list):
+                continue  # tool_result plumbing from a completed turn
+            stripped.append({"role": "user", "content": content})
+
+    # Merge consecutive same-role messages so the prefix alternates cleanly.
+    merged = []
+    for m in stripped:
+        if merged and merged[-1]["role"] == m["role"]:
+            merged[-1]["content"] = (
+                merged[-1]["content"].rstrip() + "\n\n" + str(m["content"]).lstrip()
+            )
+        else:
+            merged.append(dict(m))
+
+    out = merged + list(current)
+    while out and out[0].get("role") != "user":
+        out.pop(0)
+    return out
 
 def load_game():
     global hp, max_hp, player_alive, inventory, abilities
     global item_descriptions, party, chat_history, active_vibe, all_lines, scroll_y
+    global story_summary, summarized_upto
     if not os.path.exists(SAVE_PATH):
         log_output("[SYSTEM] No save file found.", (255, 165, 0))
         return False
@@ -504,6 +646,8 @@ def load_game():
     while loaded_history and loaded_history[0].get("role") != "user":
         loaded_history.pop(0)
     chat_history = loaded_history
+    story_summary = data.get("story_summary", "")
+    summarized_upto = max(0, min(int(data.get("summarized_upto", 0)), len(chat_history)))
     loaded_party = data.get("party", [])
     if loaded_party and isinstance(loaded_party[0], str):
         party = [{"name": clean_name(p), "hp": PARTY_HP_MAX, "emoji": "\U0001F610",
@@ -589,31 +733,39 @@ def run_recap():
         with state_lock:
             messages = _trim_history_for_request(chat_history)
             inv_str = ", ".join(f"{k} (x{v})" for k, v in inventory.items()) or "Empty"
-            abilities_str = ", ".join(
-                f"{k} ({v.get('type')}, cd: {v.get('cooldown', 0)})"
-                for k, v in abilities.items()
+            abilities_state_str = ", ".join(
+                f"{k} (cd: {v.get('cooldown', 0)})" for k, v in abilities.items()
             ) or "None"
-            party_str = ""
+            party_state_str = ""
             for m in party:
-                party_str += f"- {m['name']} (HP: {m['hp']}/5, Mood: {m.get('emoji', chr(0x1F610))})\n"
-                party_str += f"  Public Motive: {m.get('public_motive', '')}\n"
-                party_str += f"  Secret Motive: {m.get('secret_motive', '')}\n"
+                party_state_str += (
+                    f"- {m['name']} (HP: {m['hp']}/5, Mood: {m.get('emoji', chr(0x1F610))}, "
+                    f"Romantic Partner: {'Yes' if m.get('is_partner') else 'No'})\n"
+                )
             cur_hp, cur_max = hp, max_hp
+            static_system = build_static_system(_party_identity_str(), _abilities_lore_str())
+            summary_snapshot = story_summary
 
-        dynamic_prompt = build_dynamic_prompt(
-            active_vibe, cur_hp, cur_max, inv_str, abilities_str, party_str
+        dynamic_system = build_dynamic_system(
+            active_vibe, cur_hp, cur_max, inv_str, abilities_state_str,
+            party_state_str, summary_snapshot
         )
+        system_blocks = [
+            {"type": "text", "text": static_system,
+             "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": dynamic_system},
+        ]
         recap_messages = list(messages) + [
             {"role": "user", "content": RECAP_INSTRUCTION}
         ]
 
         if debug_mode:
-            _dbg_sent("RECAP", dynamic_prompt, recap_messages)
+            _dbg_sent("RECAP", dynamic_system, recap_messages)
 
         resp = _call_with_retry(
             "RECAP",
             max_tokens=500,
-            system=dynamic_prompt,
+            system=system_blocks,
             messages=recap_messages,
         )
 
@@ -713,29 +865,30 @@ def process_player_action_core(user_input):
         history_mark = len(chat_history)
         chat_history.append({"role": "user", "content": user_input})
         inv_str = ", ".join(f"{k} (x{v})" for k, v in inventory.items()) or "Empty"
-        abilities_str = ", ".join(
-            f"{k} ({v.get('type')}, cd: {v.get('cooldown', 0)})"
-            for k, v in abilities.items()
+        abilities_state_str = ", ".join(
+            f"{k} (cd: {v.get('cooldown', 0)})" for k, v in abilities.items()
         ) or "None"
-        party_hidden_rolls = {p['name']: random.randint(1, 20) for p in party}
-        party_str = ""
+        party_state_str = ""
         for m in party:
-            roll = party_hidden_rolls[m['name']]
-            party_str += f"- {m['name']} (HP: {m['hp']}/5, Mood: {m.get('emoji', chr(0x1F610))})\n"
-            party_str += f"  Desc: {m.get('desc', '')}\n"
-            party_str += f"  Personality (MBTI): {m.get('mbti', '')}\n"
-            party_str += f"  Alignment: {m.get('alignment', '')}\n"
-            party_str += f"  Character Flaw: {m.get('flaw', '')}\n"
-            party_str += f"  Love Language: {m.get('love_language', '')}\n"
-            party_str += f"  Romantic Partner: {'Yes' if m.get('is_partner') else 'No'}\n"
-            party_str += f"  Public Motive: {m.get('public_motive', '')}\n"
-            party_str += f"  Secret Motive: {m.get('secret_motive', '')}\n"
-            party_str += f"  Hidden Roll this turn: {roll}\n"
+            roll = random.randint(1, 20)
+            party_state_str += (
+                f"- {m['name']} (HP: {m['hp']}/5, Mood: {m.get('emoji', chr(0x1F610))}, "
+                f"Romantic Partner: {'Yes' if m.get('is_partner') else 'No'}, "
+                f"Hidden Roll this turn: {roll})\n"
+            )
         cur_hp, cur_max = hp, max_hp
+        static_system = build_static_system(_party_identity_str(), _abilities_lore_str())
+        summary_snapshot = story_summary
 
-    dynamic_prompt = build_dynamic_prompt(
-        active_vibe, cur_hp, cur_max, inv_str, abilities_str, party_str
+    dynamic_system = build_dynamic_system(
+        active_vibe, cur_hp, cur_max, inv_str, abilities_state_str,
+        party_state_str, summary_snapshot
     )
+    system_blocks = [
+        {"type": "text", "text": static_system,
+         "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": dynamic_system},
+    ]
 
     accumulated_text = []
     any_tool_used = False
@@ -753,13 +906,13 @@ def process_player_action_core(user_input):
                 messages_snapshot = _trim_history_for_request(chat_history)
 
             if debug_mode:
-                _dbg_sent(f"PLAYER ACTION (iter {iter_idx})", dynamic_prompt,
+                _dbg_sent(f"PLAYER ACTION (iter {iter_idx})", dynamic_system,
                           messages_snapshot, TOOLS)
 
             response = _call_with_retry(
                 f"PLAYER ACTION (iter {iter_idx})",
                 max_tokens=1024,
-                system=dynamic_prompt,
+                system=system_blocks,
                 tools=TOOLS,
                 messages=messages_snapshot,
             )
@@ -864,7 +1017,6 @@ def audit_and_correct_state(user_input, narrative, pre_state, post_state):
             changed = (
                 fixed_hp != post_state.get("hp")
                 or inv_clean != post_state.get("inventory")
-                or fixed_party != post_state.get("party")
             )
 
             hp = fixed_hp
@@ -878,31 +1030,24 @@ def audit_and_correct_state(user_input, narrative, pre_state, post_state):
                 if item not in item_descriptions:
                     item_descriptions[item] = DEFAULT_ITEM_DESCRIPTION
 
-            prev_meta = {
-                m["name"]: (
-                    m.get("color"), m.get("mbti"), m.get("alignment"),
-                    m.get("flaw", ""), m.get("love_language", ""),
-                    m.get("is_partner", False),
-                )
-                for m in party
-            }
-            party.clear()
-            for idx, _pm in enumerate(fixed_party):
-                if isinstance(_pm, dict) and "name" in _pm:
-                    _pm["name"] = clean_name(_pm["name"])
-                    old_color, old_mbti, old_align, old_flaw, old_ll, old_partner = prev_meta.get(
-                        _pm["name"], (None, None, None, "", "", False)
-                    )
-                    if not _pm.get("color"):
-                        _pm["color"] = old_color or list(
-                            UI.PARTY_COLORS[idx % len(UI.PARTY_COLORS)]
-                        )
-                    _pm["mbti"]         = old_mbti or _pm.get("mbti") or random.choice(MBTI_TYPES)
-                    _pm["alignment"]    = old_align or _pm.get("alignment") or random.choice(ALIGNMENTS)
-                    _pm["flaw"]         = _pm.get("flaw") or old_flaw
-                    _pm["love_language"]= _pm.get("love_language") or old_ll or random.choice(LOVE_LANGUAGES)
-                    _pm["is_partner"]   = old_partner or _pm.get("is_partner", False)
-            party.extend(fixed_party)
+            # The auditor may only adjust VOLATILE party fields (hp, mood).
+            # Identity (name, desc, motives, mbti, alignment, flaw, etc.) is
+            # fixed for the session so the cached system prompt stays stable.
+            existing_by_name = {clean_name(m["name"]): m for m in party}
+            for _pm in fixed_party:
+                if not (isinstance(_pm, dict) and "name" in _pm):
+                    continue
+                target = existing_by_name.get(clean_name(_pm["name"]))
+                if target is None:
+                    continue
+                try:
+                    new_hp = int(_pm.get("hp", target.get("hp", PARTY_HP_MAX)))
+                except (TypeError, ValueError):
+                    new_hp = target.get("hp", PARTY_HP_MAX)
+                target["hp"] = max(0, min(PARTY_HP_MAX, new_hp))
+                em = str(_pm.get("emoji", "")).strip()
+                if em:
+                    target["emoji"] = em
 
         if changed:
             log_output("[SYSTEM] The Gamestate Auditor noticed an anomaly and synchronized reality.", (150, 150, 150))
@@ -1085,12 +1230,16 @@ def run_async_ai_turn(user_input, is_opening=False):
         streaming_index = 0
         is_streaming = True
         is_ai_thinking = False
+        if turn_ok and not shutdown_event.is_set():
+            threading.Thread(target=maybe_update_summary, daemon=True).start()
     finally:
         turn_lock.release()
 
 def boot_session(genre_text, dimension_dict):
-    global active_vibe, is_ai_thinking
+    global active_vibe, is_ai_thinking, story_summary, summarized_upto
     is_ai_thinking = True
+    story_summary = ""
+    summarized_upto = 0
 
     log_output("System: Initialization online.", (0, 255, 255))
     if init_error:
