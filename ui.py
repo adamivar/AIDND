@@ -310,6 +310,54 @@ def build_plain_lines(text, color=(200, 200, 200), max_width=CHAT_MAX_WIDTH):
 # ---------------------------------------------------------------------------
 # Setup screen renderer
 # ---------------------------------------------------------------------------
+def draw_api_key_screen(screen, window_size, key_text, active, error_msg=""):
+    """Render the first-run API key entry screen."""
+    draw_background(screen)
+
+    cx = window_size[0] // 2
+    cy = window_size[1] // 2
+
+    title = font_dice_large.render("Agentic D&D Engine", True, UI.ACCENT)
+    screen.blit(title, (cx - title.get_width() // 2, cy - 180))
+
+    sub = font_bold.render("Enter your Anthropic API Key to get started", True, UI.TEXT_DIM)
+    screen.blit(sub, (cx - sub.get_width() // 2, cy - 120))
+
+    hint = font_small.render("Get a free key at console.anthropic.com  →  API Keys", True, UI.TEXT_FAINT)
+    screen.blit(hint, (cx - hint.get_width() // 2, cy - 95))
+
+    box_w = 500
+    box_h = 42
+    box_rect = pygame.Rect(cx - box_w // 2, cy - 55, box_w, box_h)
+    lbl = font_bold.render("API Key", True, UI.TEXT_DIM)
+    screen.blit(lbl, (box_rect.x, box_rect.y - 18))
+
+    border_col = UI.ACCENT if active else UI.BORDER
+    pygame.draw.rect(screen, (20, 22, 28), box_rect, border_radius=5)
+    pygame.draw.rect(screen, border_col, box_rect, width=1, border_radius=5)
+
+    # mask key characters except last 4
+    display = key_text
+    if len(display) > 4:
+        display = "*" * (len(display) - 4) + display[-4:]
+    cursor = "|" if active and (pygame.time.get_ticks() // CURSOR_BLINK_MS) % 2 else ""
+    txt_surf = font.render(display + cursor, True, UI.TEXT)
+    screen.blit(txt_surf, (box_rect.x + 10, box_rect.y + 13))
+
+    btn_rect = pygame.Rect(cx - 80, cy + 10, 160, 44)
+    pygame.draw.rect(screen, UI.PANEL, btn_rect, border_radius=5)
+    pygame.draw.rect(screen, UI.OK, btn_rect, width=1, border_radius=5)
+    blbl = font_bold.render("Confirm", True, UI.OK)
+    screen.blit(blbl, (btn_rect.centerx - blbl.get_width() // 2,
+                       btn_rect.centery - blbl.get_height() // 2))
+
+    if error_msg:
+        err_surf = font_small.render(error_msg, True, UI.DANGER)
+        screen.blit(err_surf, (cx - err_surf.get_width() // 2, cy + 65))
+
+    return box_rect, btn_rect
+
+
 def draw_setup_screen(screen, window_size, setup_fields, setup_active_idx):
     """Render the adventure-configuration screen.
 

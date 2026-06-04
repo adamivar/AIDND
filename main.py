@@ -41,6 +41,7 @@ from ui import (
     clean_name,
     build_styled_lines,
     build_plain_lines,
+    draw_api_key_screen,
     draw_setup_screen,
     draw_play_screen,
     set_party_color_provider,
@@ -55,19 +56,32 @@ clock = pygame.time.Clock()
 
 load_dotenv()
 active_model = MODEL_NAME
-API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 client = None
 init_error = None
 
-if API_KEY:
-    try:
-        client = anthropic.Anthropic()
-    except Exception as exc:
-        init_error = f"Anthropic client init failed: {exc}"
-else:
-    init_error = "ANTHROPIC_API_KEY is not set. Add it to a .env file."
+def _init_client():
+    global client, init_error
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if key:
+        try:
+            client = anthropic.Anthropic(api_key=key)
+            init_error = None
+        except Exception as exc:
+            client = None
+            init_error = f"Anthropic client init failed: {exc}"
+    else:
+        client = None
+        init_error = "ANTHROPIC_API_KEY is not set."
 
-game_state = "setup"
+_init_client()
+game_state = "setup" if client else "api_key"
+
+# State for the API key entry screen
+api_key_input = ""
+api_key_active = True
+api_key_error = ""
+api_key_box_rect = pygame.Rect(0, 0, 0, 0)
+api_key_btn_rect = pygame.Rect(0, 0, 0, 0)
 
 debug_mode = False
 _debug_seq = 0
@@ -116,6 +130,27 @@ def _dbg_received(label, response):
     print("  CONTENT BLOCKS:")
     for block in getattr(response, "content", []):
         print(f"    {_dbg_block_str(block)}")
+
+
+def _save_api_key_to_env(key):
+    """Write or update ANTHROPIC_API_KEY in .env, then reload the client."""
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    lines = []
+    replaced = False
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("ANTHROPIC_API_KEY"):
+                    lines.append(f"ANTHROPIC_API_KEY={key}\n")
+                    replaced = True
+                else:
+                    lines.append(line)
+    if not replaced:
+        lines.append(f"ANTHROPIC_API_KEY={key}\n")
+    with open(env_path, "w", encoding="utf-8") as fh:
+        fh.writelines(lines)
+    os.environ["ANTHROPIC_API_KEY"] = key
+    _init_client()
 
 
 def random_personality():
@@ -1099,7 +1134,40 @@ while active:
                 if load_game():
                     game_state = "playing"
 
-        if game_state == "setup":
+        if game_state == "api_key":
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                api_key_active = api_key_box_rect.collidepoint(event.pos)
+                if api_key_btn_rect.collidepoint(event.pos):
+                    key = api_key_input.strip()
+                    if not key.startswith("sk-ant-"):
+                        api_key_error = "Key must start with 'sk-ant-'  —  check console.anthropic.com"
+                    else:
+                        _save_api_key_to_env(key)
+                        if client:
+                            game_state = "setup"
+                            api_key_error = ""
+                        else:
+                            api_key_error = init_error or "Failed to initialise client."
+            elif event.type == pygame.KEYDOWN and api_key_active:
+                if event.key == pygame.K_RETURN:
+                    key = api_key_input.strip()
+                    if not key.startswith("sk-ant-"):
+                        api_key_error = "Key must start with 'sk-ant-'  —  check console.anthropic.com"
+                    else:
+                        _save_api_key_to_env(key)
+                        if client:
+                            game_state = "setup"
+                            api_key_error = ""
+                        else:
+                            api_key_error = init_error or "Failed to initialise client."
+                elif event.key == pygame.K_BACKSPACE:
+                    api_key_input = api_key_input[:-1]
+                    api_key_error = ""
+                elif event.unicode.isprintable():
+                    api_key_input += event.unicode
+                    api_key_error = ""
+
+        elif game_state == "setup":
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 setup_active_idx = None
                 for i, field in enumerate(setup_fields):
@@ -1216,7 +1284,11 @@ while active:
                     if (not ctrl and len(input_text) < INPUT_MAX_LENGTH and event.unicode.isprintable()):
                         input_text += event.unicode
 
-    if game_state == "setup":
+    if game_state == "api_key":
+        api_key_box_rect, api_key_btn_rect = draw_api_key_screen(
+            screen, WINDOW_SIZE, api_key_input, api_key_active, api_key_error)
+
+    elif game_state == "setup":
         btn_dice_rect, btn_start_rect = draw_setup_screen(
             screen, WINDOW_SIZE, setup_fields, setup_active_idx)
 
