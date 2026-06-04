@@ -416,7 +416,7 @@ def _trim_history_for_request(history):
 
 def load_game():
     global hp, max_hp, player_alive, inventory, abilities
-    global item_descriptions, party, chat_history, active_vibe
+    global item_descriptions, party, chat_history, active_vibe, all_lines, scroll_y
     if not os.path.exists(SAVE_PATH):
         log_output("[SYSTEM] No save file found.", (255, 165, 0))
         return False
@@ -426,49 +426,54 @@ def load_game():
     except (OSError, json.JSONDecodeError) as exc:
         log_output(f"[SYSTEM] Load failed: {exc}", (255, 80, 80))
         return False
-        with state_lock:
-            hp = min(data.get("hp", STARTING_HP), STARTING_HP)
-            max_hp = STARTING_HP
-        player_alive = data.get("player_alive", True)
-        inventory = data.get("inventory", {})
-        loaded_abilities = data.get("abilities", {})
-        abilities.clear()
-        for k, v in loaded_abilities.items():
-            abilities[clean_name(k)] = v
-        item_descriptions = data.get("item_descriptions", {})
-        active_vibe = data.get("active_vibe", "neutral")
-        loaded_history = data.get("chat_history", [])
-        while loaded_history and loaded_history[0].get("role") != "user":
-            loaded_history.pop(0)
-        chat_history = loaded_history
-        loaded_party = data.get("party", [])
-        if loaded_party and isinstance(loaded_party[0], str):
-            party = [{"name": clean_name(p), "hp": PARTY_HP_MAX, "emoji": "\U0001F610",
-                      "desc": "", "public_motive": "", "secret_motive": "",
-                      "flaw": "",
-                      "love_language": random.choice(LOVE_LANGUAGES),
-                      "is_partner": False,
-                      "mbti": random_personality()[0],
-                      "alignment": random_personality()[1]}
-                     for p in loaded_party]
-        else:
-            party = loaded_party
-            for _m in party:
-                _m["name"] = clean_name(_m.get("name", ""))
-                if not _m.get("mbti"):
-                    _m["mbti"] = random.choice(MBTI_TYPES)
-                if not _m.get("alignment"):
-                    _m["alignment"] = random.choice(ALIGNMENTS)
-                if "flaw" not in _m:
-                    _m["flaw"] = ""
-                if "love_language" not in _m:
-                    _m["love_language"] = random.choice(LOVE_LANGUAGES)
-                if "is_partner" not in _m:
-                    _m["is_partner"] = False
-        for _i, _m in enumerate(party):
-            if not _m.get("color"):
-                _m["color"] = list(UI.PARTY_COLORS[_i % len(UI.PARTY_COLORS)])
 
+    with state_lock:
+        saved_max_hp = data.get("max_hp", STARTING_HP)
+        max_hp = saved_max_hp
+        hp = min(data.get("hp", saved_max_hp), saved_max_hp)
+    player_alive = data.get("player_alive", True)
+    inventory = data.get("inventory", {})
+    loaded_abilities = data.get("abilities", {})
+    abilities.clear()
+    for k, v in loaded_abilities.items():
+        abilities[clean_name(k)] = v
+    item_descriptions = data.get("item_descriptions", {})
+    active_vibe = data.get("active_vibe", "neutral")
+    loaded_history = data.get("chat_history", [])
+    while loaded_history and loaded_history[0].get("role") != "user":
+        loaded_history.pop(0)
+    chat_history = loaded_history
+    loaded_party = data.get("party", [])
+    if loaded_party and isinstance(loaded_party[0], str):
+        party = [{"name": clean_name(p), "hp": PARTY_HP_MAX, "emoji": "\U0001F610",
+                  "desc": "", "public_motive": "", "secret_motive": "",
+                  "flaw": "",
+                  "love_language": random.choice(LOVE_LANGUAGES),
+                  "is_partner": False,
+                  "mbti": random_personality()[0],
+                  "alignment": random_personality()[1]}
+                 for p in loaded_party]
+    else:
+        party = loaded_party
+        for _m in party:
+            _m["name"] = clean_name(_m.get("name", ""))
+            if not _m.get("mbti"):
+                _m["mbti"] = random.choice(MBTI_TYPES)
+            if not _m.get("alignment"):
+                _m["alignment"] = random.choice(ALIGNMENTS)
+            if "flaw" not in _m:
+                _m["flaw"] = ""
+            if "love_language" not in _m:
+                _m["love_language"] = random.choice(LOVE_LANGUAGES)
+            if "is_partner" not in _m:
+                _m["is_partner"] = False
+    for _i, _m in enumerate(party):
+        if not _m.get("color"):
+            _m["color"] = list(UI.PARTY_COLORS[_i % len(UI.PARTY_COLORS)])
+
+    with state_lock:
+        all_lines.clear()
+    scroll_y = 0
     log_output("[SYSTEM] Game loaded. Continue your adventure.", (0, 255, 0))
     return True
 
