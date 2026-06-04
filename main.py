@@ -54,6 +54,7 @@ from config import (
 from prompts import (
     SEED_DIMENSIONS,
     TOOLS,
+    RECAP_INSTRUCTION,
     build_seed_prompt,
     build_dynamic_prompt,
     build_opening_prompt,
@@ -533,9 +534,106 @@ def load_game():
 
     with state_lock:
         all_lines.clear()
+    _render_history_to_chronicle(chat_history)
     scroll_y = 0
-    log_output("[SYSTEM] Game loaded. Continue your adventure.", (0, 255, 0))
+
+    last_is_assistant = bool(chat_history) and chat_history[-1].get("role") == "assistant"
+    if client and player_alive and last_is_assistant:
+        log_output("[SYSTEM] Game loaded. The Dungeon Master gathers the threads of your tale...", (0, 255, 0))
+        threading.Thread(target=run_recap, daemon=True).start()
+    else:
+        log_output("[SYSTEM] Game loaded. Continue your adventure.", (0, 255, 0))
     return True
+
+def _render_history_to_chronicle(history):
+    """Replay saved chat history into the visible chronicle.
+
+    The very first user message is the internal opening-seed prompt and
+    tool_result plumbing is skipped; everything else is rendered the same
+    way it appears during live play.
+    """
+    for idx, msg in enumerate(history):
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "user":
+            if idx == 0 or isinstance(content, list):
+                continue  # opening seed prompt, or tool_result plumbing
+            text = str(content).strip()
+            if text:
+                log_output(f"You: {text}", (0, 255, 255))
+        elif role == "assistant":
+            if isinstance(content, list):
+                parts = [b.get("text", "") for b in content
+                         if isinstance(b, dict) and b.get("type") == "text"]
+                narration = "\n\n".join(p for p in parts if p).strip()
+            else:
+                narration = str(content).strip()
+            if narration:
+                log_styled(sanitize_text(narration), (220, 220, 220))
+
+def run_recap():
+    """After a load, have the DM recap the situation and pending decision.
+
+    A lightweight, read-only turn: it does not tick cooldowns, mutate
+    state, run the auditor, or append to chat_history.
+    """
+    global is_ai_thinking, streaming_text_full, is_streaming
+    global streaming_index, streaming_text_current
+
+    if client is None:
+        return
+    if not turn_lock.acquire(blocking=False):
+        return
+    try:
+        is_ai_thinking = True
+        with state_lock:
+            messages = _trim_history_for_request(chat_history)
+            inv_str = ", ".join(f"{k} (x{v})" for k, v in inventory.items()) or "Empty"
+            abilities_str = ", ".join(
+                f"{k} ({v.get('type')}, cd: {v.get('cooldown', 0)})"
+                for k, v in abilities.items()
+            ) or "None"
+            party_str = ""
+            for m in party:
+                party_str += f"- {m['name']} (HP: {m['hp']}/5, Mood: {m.get('emoji', chr(0x1F610))})\n"
+                party_str += f"  Public Motive: {m.get('public_motive', '')}\n"
+                party_str += f"  Secret Motive: {m.get('secret_motive', '')}\n"
+            cur_hp, cur_max = hp, max_hp
+
+        dynamic_prompt = build_dynamic_prompt(
+            active_vibe, cur_hp, cur_max, inv_str, abilities_str, party_str
+        )
+        recap_messages = list(messages) + [
+            {"role": "user", "content": RECAP_INSTRUCTION}
+        ]
+
+        if debug_mode:
+            _dbg_sent("RECAP", dynamic_prompt, recap_messages)
+
+        resp = _call_with_retry(
+            "RECAP",
+            max_tokens=500,
+            system=dynamic_prompt,
+            messages=recap_messages,
+        )
+
+        if debug_mode:
+            _dbg_received("RECAP", resp)
+
+        if shutdown_event.is_set():
+            return
+
+        text = _extract_text(resp.content)
+        if text:
+            streaming_text_full = sanitize_text(text)
+            streaming_text_current = ""
+            streaming_index = 0
+            is_streaming = True
+    except Exception as exc:
+        log_output(f"[SYSTEM] Could not generate recap: {exc}", (255, 165, 0))
+    finally:
+        is_ai_thinking = False
+        turn_lock.release()
 
 def _extract_text(content_blocks):
     parts = [b.text for b in content_blocks if getattr(b, "type", None) == "text"]

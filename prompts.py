@@ -279,6 +279,16 @@ def build_opening_prompt(seed):
     )
 
 
+RECAP_INSTRUCTION = (
+    "[SYSTEM: The player has just reloaded a saved game and needs to regain their bearings. "
+    "Do NOT advance the story, do NOT roll dice, and do NOT call any tools. "
+    "In 3-5 sentences, recap where things stand right now: the immediate situation, who is "
+    "present, and any tension in the air. Then end by clearly restating the decision or "
+    "question the player is currently facing. Speak as the Dungeon Master addressing the "
+    "returning player.]"
+)
+
+
 def build_auditor_prompt(user_input, narrative, pre_state, post_state):
     return f"""
     You are an impartial Game State Auditor. The DM just processed a turn.
