@@ -77,6 +77,7 @@ from ui import (
 )
 
 pygame.init()
+pygame.key.set_repeat(400, 40)   # 400ms initial delay, repeat every 40ms
 is_fullscreen = False
 screen = pygame.display.set_mode(WINDOW_SIZE, pygame.SCALED)
 pygame.display.set_caption(WINDOW_TITLE)
