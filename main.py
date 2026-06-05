@@ -595,8 +595,14 @@ def _trim_history_for_request(history):
                 ).strip()
             else:
                 text = str(content).strip()
-            if text:
-                stripped.append({"role": "assistant", "content": text})
+            # Always keep an assistant entry — even if this turn had only
+            # tool_use and no narration text — so the alternating user/
+            # assistant pattern is preserved.  Without this placeholder,
+            # consecutive user messages get merged and the AI reads the
+            # opening-seed prompt fused with the current action, which
+            # causes it to re-narrate the intro.
+            stripped.append({"role": "assistant",
+                             "content": text if text else "..."})
         else:  # user
             if isinstance(content, list):
                 continue  # tool_result plumbing from a completed turn
