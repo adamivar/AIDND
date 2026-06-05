@@ -342,10 +342,16 @@ def build_summary_prompt(prev_summary, transcript):
 def build_opening_prompt(seed, party_size):
     party_names = ", ".join(seed[f"party{i}_name"] for i in range(1, party_size + 1))
     premise_line = f"- PREMISE: {seed['premise']}\n" if seed.get("premise", "").strip() else ""
+    if party_size == 0:
+        party_line = "The player has no companions — they adventure alone.\n"
+    elif party_size == 1:
+        party_line = f"Introduce the player's sole companion: {party_names}.\n"
+    else:
+        party_line = f"Introduce the player's {party_size} companions: {party_names}.\n"
     return (
         "Begin the session. Use the details below to invent a vivid opening scene "
         "that reflects the genre and tone. Flesh out all details yourself. "
-        f"Introduce the player's {party_size} party member{'s' if party_size > 1 else ''}: {party_names}.\n"
+        f"{party_line}"
         f"- GENRE: {seed['genre']}\n"
         f"- YOUR CHARACTER: {seed['identity']}\n"
         f"{premise_line}"

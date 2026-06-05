@@ -471,7 +471,7 @@ def draw_setup_screen(screen, window_size, setup_fields, setup_active_idx,
     screen.blit(m_lbl, (party_minus_rect.centerx - m_lbl.get_width() // 2,
                         party_minus_rect.centery - m_lbl.get_height() // 2))
 
-    num_surf = font_bold.render(str(party_size), True, UI.ACCENT)
+    num_surf = font_bold.render("Solo" if party_size == 0 else str(party_size), True, UI.ACCENT)
     screen.blit(num_surf, (minus_x + btn_sz + 14, y - 1))
 
     pygame.draw.rect(screen, UI.PANEL, party_plus_rect, border_radius=4)

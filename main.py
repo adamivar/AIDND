@@ -1473,7 +1473,7 @@ while active:
                         setup_active_idx = i
 
                 if party_minus_rect.collidepoint(event.pos):
-                    setup_party_size = max(1, setup_party_size - 1)
+                    setup_party_size = max(0, setup_party_size - 1)
                 elif party_plus_rect.collidepoint(event.pos):
                     setup_party_size = min(3, setup_party_size + 1)
 
