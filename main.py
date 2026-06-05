@@ -74,7 +74,9 @@ from ui import (
     draw_setup_screen,
     draw_play_screen,
     set_party_color_provider,
+    _char_wrap,
 )
+from config import PREMISE_MAX_LENGTH
 
 pygame.init()
 pygame.key.set_repeat(400, 40)   # 400ms initial delay, repeat every 40ms
@@ -207,17 +209,16 @@ def random_name_seed():
     return f"[{lang}] {chars}"
 
 setup_fields = [
-    {"key": "genre", "label": "Genre", "text": "", "rect": pygame.Rect(0, 0, 0, 0)},
-    {"key": "tone", "label": "Tone", "text": "", "rect": pygame.Rect(0, 0, 0, 0)},
-    {"key": "who", "label": "Who", "text": "", "rect": pygame.Rect(0, 0, 0, 0)},
-    {"key": "what", "label": "What", "text": "", "rect": pygame.Rect(0, 0, 0, 0)},
-    {"key": "when", "label": "When", "text": "", "rect": pygame.Rect(0, 0, 0, 0)},
-    {"key": "where", "label": "Where", "text": "", "rect": pygame.Rect(0, 0, 0, 0)},
-    {"key": "why", "label": "Why", "text": "", "rect": pygame.Rect(0, 0, 0, 0)},
+    {"key": "genre",   "label": "Genre",   "text": "", "rect": pygame.Rect(0, 0, 0, 0)},
+    {"key": "tone",    "label": "Tone",    "text": "", "rect": pygame.Rect(0, 0, 0, 0)},
+    {"key": "premise", "label": "Premise", "text": "", "rect": pygame.Rect(0, 0, 0, 0)},
 ]
 setup_active_idx = None
-btn_dice_rect = pygame.Rect(0, 0, 0, 0)
-btn_start_rect = pygame.Rect(0, 0, 0, 0)
+setup_party_size = 3           # chosen party size (1-3)
+btn_dice_rect    = pygame.Rect(0, 0, 0, 0)
+btn_start_rect   = pygame.Rect(0, 0, 0, 0)
+party_minus_rect = pygame.Rect(0, 0, 0, 0)
+party_plus_rect  = pygame.Rect(0, 0, 0, 0)
 
 state_lock = threading.RLock()
 turn_lock = threading.Lock()
@@ -314,8 +315,8 @@ def _parse_seed_json(text):
         repaired += "}" * open_braces
     return json.loads(repaired)
 
-def _ask_ai_for_custom_seed(genre_text, dimension_dict):
-    prompt = build_seed_prompt(dimension_dict, [genre_text])
+def _ask_ai_for_custom_seed(genre_text, dimension_dict, party_size):
+    prompt = build_seed_prompt(dimension_dict, [genre_text], party_size)
 
     if debug_mode:
         _dbg_sent("SEED GENERATION", None,
@@ -338,20 +339,35 @@ def _ask_ai_for_custom_seed(genre_text, dimension_dict):
     chosen_genre = str(data.get("genre", "")).strip() or genre_text
     seed = {"genre": chosen_genre}
 
+    # Base dimensions
     for dim in SEED_DIMENSIONS:
         val = str(data.get(dim, "")).strip()
         seed[dim] = val
 
+    # Ability slots
+    for kind in ("soft", "active"):
+        count = NUM_SOFT_ABILITIES if kind == "soft" else NUM_ACTIVE_ABILITIES
+        for n in range(1, count + 1):
+            for suffix in ("", "_desc"):
+                key = f"{kind}_ability_{n}{suffix}"
+                seed[key] = str(data.get(key, "")).strip()
+
+    # Party slots up to party_size
+    for i in range(1, party_size + 1):
+        for suffix in ("_name", "_desc", "_public", "_secret", "_flaw"):
+            key = f"party{i}{suffix}"
+            seed[key] = str(data.get(key, "")).strip()
+
     return seed
 
-def generate_custom_seed_from_inputs(genre_text, dimension_dict):
+def generate_custom_seed_from_inputs(genre_text, dimension_dict, party_size):
     if client is None:
         log_output("[SEED] No API client available.", (255, 80, 80))
         return None
     last_exc = None
     for attempt in range(SEED_MAX_ATTEMPTS):
         try:
-            return _ask_ai_for_custom_seed(genre_text, dimension_dict)
+            return _ask_ai_for_custom_seed(genre_text, dimension_dict, party_size)
         except Exception as exc:
             last_exc = exc
             reason = f"{type(exc).__name__}: {exc}"
@@ -1242,7 +1258,7 @@ def run_async_ai_turn(user_input, is_opening=False):
     finally:
         turn_lock.release()
 
-def boot_session(genre_text, dimension_dict):
+def boot_session(genre_text, dimension_dict, party_size):
     global active_vibe, is_ai_thinking, story_summary, summarized_upto
     is_ai_thinking = True
     story_summary = ""
@@ -1258,7 +1274,7 @@ def boot_session(genre_text, dimension_dict):
     log_output("Controls: F11 fullscreen | F12 debug view | Ctrl+S save | Ctrl+L load | Arrows/Wheel scroll", (100, 100, 105))
     log_output("Rolling the dice of fate...", (110, 110, 140))
 
-    seed = generate_custom_seed_from_inputs(genre_text, dimension_dict)
+    seed = generate_custom_seed_from_inputs(genre_text, dimension_dict, party_size)
     if seed is None:
         is_ai_thinking = False
         log_output(
@@ -1281,7 +1297,7 @@ def boot_session(genre_text, dimension_dict):
                     "cooldown": 0,
                 }
         party.clear()
-        for i in range(PARTY_SIZE):
+        for i in range(party_size):
             mbti, align = random_personality()
             party.append({
                 "name": clean_name(seed[f"party{i + 1}_name"]),
@@ -1302,14 +1318,10 @@ def boot_session(genre_text, dimension_dict):
             print(f"  {_m['name']}: {_m['mbti']} / {_m['alignment']}")
 
     log_output(
-        f"[SEED] {dimension_dict.get('who', 'Unknown')} / "
-        f"{dimension_dict.get('what', 'Unknown')} / "
-        f"{dimension_dict.get('when', 'Unknown')} / "
-        f"{dimension_dict.get('where', 'Unknown')} / "
-        f"{dimension_dict.get('why', 'Unknown')}  [TONE: {active_vibe}]",
+        f"[SEED] {seed.get('premise', '(random)')}  [TONE: {active_vibe}]",
         (110, 110, 140),
     )
-    opening = build_opening_prompt(seed)
+    opening = build_opening_prompt(seed, party_size)
     run_async_ai_turn(opening, is_opening=True)
 
 input_text = ""
@@ -1460,44 +1472,71 @@ while active:
                     if field["rect"].collidepoint(event.pos):
                         setup_active_idx = i
 
-                if btn_dice_rect.collidepoint(event.pos):
-                    for f in setup_fields:
-                        n = random.randint(1, 3)
-                        f["text"] = " ".join(random_words(n)).title()
+                if party_minus_rect.collidepoint(event.pos):
+                    setup_party_size = max(1, setup_party_size - 1)
+                elif party_plus_rect.collidepoint(event.pos):
+                    setup_party_size = min(3, setup_party_size + 1)
+
+                elif btn_dice_rect.collidepoint(event.pos):
+                    # Roll Dice: generate random who/what/when/where/why and
+                    # assemble them into the Premise field as a sentence.
+                    who   = " ".join(random_words(random.randint(1, 2))).title()
+                    what  = " ".join(random_words(random.randint(1, 2))).title()
+                    when  = " ".join(random_words(random.randint(1, 2))).title()
+                    where = " ".join(random_words(random.randint(1, 2))).title()
+                    why   = " ".join(random_words(random.randint(1, 2))).title()
+                    setup_fields[2]["text"] = (
+                        f"{who} seeks {what} at {where} during {when} because of {why}."
+                    )[:PREMISE_MAX_LENGTH]
+                    # Also randomise Genre and Tone if they're blank
+                    if not setup_fields[0]["text"].strip():
+                        setup_fields[0]["text"] = " ".join(random_words(random.randint(1, 2))).title()
+                    if not setup_fields[1]["text"].strip():
+                        setup_fields[1]["text"] = " ".join(random_words(random.randint(1, 2))).title()
 
                 elif btn_start_rect.collidepoint(event.pos):
-                    genre_val = setup_fields[0]["text"].strip()
-                    if not genre_val:
-                        genre_val = "Fantasy Mystery"
+                    genre_val = setup_fields[0]["text"].strip() or "Fantasy Mystery"
+                    tone_val  = setup_fields[1]["text"].strip() or "Mysterious"
+                    premise_val = setup_fields[2]["text"].strip()
 
+                    # Build noise dict for seed generation
                     noise_dict = {}
                     for dim in SEED_DIMENSIONS:
-                        if dim in _NAME_DIMS:
-                            noise_dict[dim] = random_name_seed()
-                        else:
-                            noise_dict[dim] = " ".join(random_words(random.randint(1, 2)))
-
-                    for field in setup_fields[1:]:
-                        val = field["text"].strip()
-                        if val:
-                            noise_dict[field["key"]] = val
+                        noise_dict[dim] = " ".join(random_words(random.randint(1, 2)))
+                    # Override with user values
+                    noise_dict["tone"] = tone_val
+                    if premise_val:
+                        noise_dict["premise"] = premise_val
+                    # Party name seeds
+                    for i in range(1, 4):
+                        noise_dict[f"party{i}_name"] = random_name_seed()
+                    # Ability noise
+                    for kind in ("soft", "active"):
+                        count = NUM_SOFT_ABILITIES if kind == "soft" else NUM_ACTIVE_ABILITIES
+                        for n in range(1, count + 1):
+                            noise_dict[f"{kind}_ability_{n}"] = " ".join(random_words(1))
 
                     game_state = "playing"
-                    threading.Thread(target=boot_session, args=(genre_val, noise_dict), daemon=True).start()
+                    threading.Thread(
+                        target=boot_session,
+                        args=(genre_val, noise_dict, setup_party_size),
+                        daemon=True,
+                    ).start()
 
             elif event.type == pygame.KEYDOWN:
                 if setup_active_idx is not None:
                     mods = pygame.key.get_mods()
                     ctrl = mods & pygame.KMOD_CTRL
                     fld = setup_fields[setup_active_idx]
+                    max_len = PREMISE_MAX_LENGTH if setup_active_idx == 2 else SETUP_FIELD_MAX_LENGTH
                     if ctrl and event.key == pygame.K_v:
-                        pasted = " ".join(_clipboard_get().split())
-                        fld["text"] = (fld["text"] + pasted)[:SETUP_FIELD_MAX_LENGTH]
+                        pasted = _clipboard_get()
+                        fld["text"] = (fld["text"] + pasted)[:max_len]
                     elif ctrl and event.key == pygame.K_c:
                         _clipboard_set(fld["text"])
                     elif event.key == pygame.K_BACKSPACE:
                         fld["text"] = fld["text"][:-1]
-                    elif event.unicode.isprintable() and len(fld["text"]) < SETUP_FIELD_MAX_LENGTH:
+                    elif event.unicode.isprintable() and len(fld["text"]) < max_len:
                         fld["text"] += event.unicode
 
         elif game_state == "playing":
@@ -1588,8 +1627,9 @@ while active:
             screen, WINDOW_SIZE, api_key_input, api_key_active, api_key_error)
 
     elif game_state == "setup":
-        btn_dice_rect, btn_start_rect = draw_setup_screen(
-            screen, WINDOW_SIZE, setup_fields, setup_active_idx)
+        btn_dice_rect, btn_start_rect, party_minus_rect, party_plus_rect = draw_setup_screen(
+            screen, WINDOW_SIZE, setup_fields, setup_active_idx,
+            setup_party_size, party_minus_rect, party_plus_rect)
 
     elif game_state == "playing":
         draw_play_screen(screen, WINDOW_SIZE, _build_render_snapshot(),

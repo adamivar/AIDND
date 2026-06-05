@@ -14,7 +14,7 @@ from config import (
 # ---------------------------------------------------------------------------
 SEED_DIMENSIONS = [
     "identity",
-    "who", "what", "when", "where", "why", "tone",
+    "premise", "tone",
 ]
 
 for _i in range(1, NUM_SOFT_ABILITIES + 1):
@@ -34,11 +34,7 @@ for _i in range(1, PARTY_SIZE + 1):
 # ---------------------------------------------------------------------------
 SEED_DIM_HINT: dict[str, str] = {
     "identity": "who the player character is, fitting the genre",
-    "who":      "a person or character archetype that fits the genre",
-    "what":     "a physical object central to the scene, fitting the genre",
-    "when":     "a time, season, or event marking the moment",
-    "where":    "a place or location that fits the genre",
-    "why":      "the player's motivation or situation",
+    "premise":  "1-3 sentences covering who is involved, what the central object/conflict is, where and when it takes place, and why the player is there — all fitting the genre",
     "tone":     "the emotional tone of the story",
 }
 
@@ -204,48 +200,76 @@ TOOLS = [
 ]
 
 
-def build_seed_prompt(noise, genre_words):
+def build_seed_prompt(noise, genre_words, party_size):
     """Build the world-seed prompt.
 
-    The random words are now treated as loose INSPIRATION to DERIVE each
-    field from, not as literal text that must be copied in verbatim. This
-    keeps generated worlds coherent instead of stuffing surreal word salad
-    into every slot. If a set of words already reads as a sensible value
-    for that dimension, the AI keeps it; otherwise it derives something
-    that fits the genre.
+    noise must contain keys for every entry in SEED_DIMENSIONS plus one
+    per-party-member block (party1_name … party{party_size}_flaw).
+    genre_words provides the raw genre input; party_size controls how
+    many companion slots the AI must fill.
     """
     genre = genre_words[0] if genre_words else "Surreal Mystery"
 
+    # Base dimensions (identity, premise, tone)
     lines = "\n".join(
         f"- {dim}: derive {SEED_DIM_HINT[dim]} from these words -> "
-        f"\"{noise[dim]}\""
+        f"\"{noise.get(dim, '')}\""
         for dim in SEED_DIMENSIONS
     )
+
+    # Ability slots (fixed counts from config)
+    ability_lines = []
+    for _i in range(1, NUM_SOFT_ABILITIES + 1):
+        ability_lines.append(
+            f"- soft_ability_{_i}: derive {SEED_DIM_HINT[f'soft_ability_{_i}']} "
+            f"from these words -> \"{noise.get(f'soft_ability_{_i}', '')}\""
+        )
+        ability_lines.append(
+            f"- soft_ability_{_i}_desc: {SEED_DIM_HINT[f'soft_ability_{_i}_desc']} "
+            f"(from ability name above)"
+        )
+    for _i in range(1, NUM_ACTIVE_ABILITIES + 1):
+        ability_lines.append(
+            f"- active_ability_{_i}: derive {SEED_DIM_HINT[f'active_ability_{_i}']} "
+            f"from these words -> \"{noise.get(f'active_ability_{_i}', '')}\""
+        )
+        ability_lines.append(
+            f"- active_ability_{_i}_desc: {SEED_DIM_HINT[f'active_ability_{_i}_desc']} "
+            f"(from ability name above)"
+        )
+
+    # Party slots — only up to party_size
+    party_lines = []
+    for _i in range(1, party_size + 1):
+        party_lines += [
+            f"- party{_i}_name: {SEED_DIM_HINT[f'party{_i}_name']} "
+            f"-> \"{noise.get(f'party{_i}_name', '')}\"",
+            f"- party{_i}_desc: a short description of companion {_i}",
+            f"- party{_i}_public: their stated public goal or motive",
+            f"- party{_i}_secret: their hidden true secret motive",
+            f"- party{_i}_flaw: {SEED_DIM_HINT[f'party{_i}_flaw']}",
+        ]
+
+    all_lines = "\n".join([lines] + ability_lines + party_lines)
 
     return (
         "You are generating a world seed for a text-based RPG.\n\n"
         f"First, derive a GENRE from these words: \"{genre}\". "
-        "If the words already make sense as a genre, keep them as is; "
-        "otherwise interpret them into the nearest coherent genre.\n\n"
-        "Then, for EACH category below, you are given some random words. "
-        "Derive a value for that category that makes sense within the "
-        "chosen genre. If the given words already make sense as a value "
-        "for that category, keep them as is; otherwise reinterpret them "
-        "into something coherent and evocative that fits the genre and "
-        "the other choices. Do NOT force surreal or nonsensical word "
-        "combinations into the output; favor a believable, playable world.\n\n"
+        "If the words already read as a genre, keep them; otherwise "
+        "interpret them into the nearest coherent genre.\n\n"
+        "For EACH category below, derive a value fitting the chosen genre. "
+        "If the given words already make sense as a value, keep them; "
+        "otherwise reinterpret into something coherent and evocative. "
+        "Do NOT force surreal or nonsensical combinations.\n\n"
         "FORMATTING RULES:\n"
-        "1. For ability names and party names, the value MUST be short "
-        "(1-4 words max). Put all lore, rules, and details in their "
-        "respective '_desc', '_public', or '_secret' fields.\n"
-        "2. For 'who', 'what', 'when', 'where', 'why', write a concise "
-        "sentence (10-20 words) that fits the genre.\n"
-        "3. Names of people and places should sound natural for the "
-        "genre, not random dictionary words.\n\n"
-        f"{lines}\n\n"
-        "Reply with ONLY a JSON object, no prose, no code fence, keys "
-        "matching the categories exactly, PLUS a \"genre\" key set to the "
-        "chosen genre."
+        "1. Ability names and party names: 1-4 words max. Details go in "
+        "their _desc / _public / _secret fields.\n"
+        "2. premise: 1-3 vivid sentences covering who, what, where, when, "
+        "and why — the core setup of the opening scene.\n"
+        "3. Names should sound natural for the genre.\n\n"
+        f"{all_lines}\n\n"
+        "Reply with ONLY a JSON object, no prose, no code fence. Keys must "
+        "match the categories exactly, PLUS a \"genre\" key set to the chosen genre."
     )
 
 
@@ -315,19 +339,16 @@ def build_summary_prompt(prev_summary, transcript):
     )
 
 
-def build_opening_prompt(seed):
-    party_names = ", ".join(seed[f"party{i}_name"] for i in range(1, PARTY_SIZE + 1))
+def build_opening_prompt(seed, party_size):
+    party_names = ", ".join(seed[f"party{i}_name"] for i in range(1, party_size + 1))
+    premise_line = f"- PREMISE: {seed['premise']}\n" if seed.get("premise", "").strip() else ""
     return (
-        "Begin the session. Below are five SEED WORDS, a GENRE, an IDENTITY, and a TONE. "
-        "Invent a vivid opening scene that clearly reflects all of this, fleshing out the details yourself, in the given tone. "
-        f"Introduce the player's {PARTY_SIZE} party members: {party_names}.\n"
+        "Begin the session. Use the details below to invent a vivid opening scene "
+        "that reflects the genre and tone. Flesh out all details yourself. "
+        f"Introduce the player's {party_size} party member{'s' if party_size > 1 else ''}: {party_names}.\n"
         f"- GENRE: {seed['genre']}\n"
         f"- YOUR CHARACTER: {seed['identity']}\n"
-        f"- WHO: {seed['who']}\n"
-        f"- WHAT: {seed['what']}\n"
-        f"- WHEN: {seed['when']}\n"
-        f"- WHERE: {seed['where']}\n"
-        f"- WHY: {seed['why']}\n"
+        f"{premise_line}"
         f"- TONE: {seed['tone']}"
     )
 

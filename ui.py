@@ -390,44 +390,102 @@ def draw_api_key_screen(screen, window_size, key_text, active, error_msg=""):
     return box_rect, btn_rect
 
 
-def draw_setup_screen(screen, window_size, setup_fields, setup_active_idx):
+def draw_setup_screen(screen, window_size, setup_fields, setup_active_idx,
+                      party_size, party_minus_rect, party_plus_rect):
     """Render the adventure-configuration screen.
 
-    Mutates each field's ``rect`` so the caller's click handling lines
-    up with what's drawn. Returns (btn_dice_rect, btn_start_rect).
+    setup_fields must be [genre_field, tone_field, premise_field].
+    Mutates each field's ``rect`` in place.
+    Returns (btn_dice_rect, btn_start_rect, party_minus_rect, party_plus_rect).
     """
     draw_background(screen)
 
+    W, H = window_size
+    cx = W // 2
+
     title = font_dice_large.render("Configure Your Adventure", True, UI.ACCENT)
-    screen.blit(title, (window_size[0] // 2 - title.get_width() // 2, 70))
+    screen.blit(title, (cx - title.get_width() // 2, 28))
 
-    box_w = 400
-    box_h = 40
-    start_y = 155
-    gap = 55
-    center_x = window_size[0] // 2 - box_w // 2
+    col_w = 360
+    col_x = cx - col_w // 2
+    y = 80
 
-    for i, field in enumerate(setup_fields):
-        field["rect"] = pygame.Rect(center_x, start_y + i * gap, box_w, box_h)
-
+    # ── Genre and Tone side-by-side ──────────────────────────────────────────
+    half_w = (col_w - 12) // 2
+    for i, field in enumerate([setup_fields[0], setup_fields[1]]):
+        fx = col_x + i * (half_w + 12)
+        field["rect"] = pygame.Rect(fx, y + 20, half_w, 36)
         lbl = font_bold.render(field["label"], True, UI.TEXT_DIM)
-        screen.blit(lbl, (center_x, start_y + i * gap - 18))
-
-        is_active = (i == setup_active_idx)
-        color = UI.ACCENT if is_active else UI.BORDER
+        screen.blit(lbl, (fx, y))
+        is_active = (setup_active_idx == i)
+        col = UI.ACCENT if is_active else UI.BORDER
         pygame.draw.rect(screen, (20, 22, 28), field["rect"], border_radius=5)
-        pygame.draw.rect(screen, color, field["rect"], width=1,
-                         border_radius=5)
+        pygame.draw.rect(screen, col, field["rect"], width=1, border_radius=5)
+        cursor = "|" if is_active and (pygame.time.get_ticks() // CURSOR_BLINK_MS) % 2 else ""
+        screen.blit(font.render(field["text"] + cursor, True, UI.TEXT),
+                    (fx + 10, y + 28))
 
-        cursor = "|" if is_active and (pygame.time.get_ticks() // CURSOR_BLINK_MS) % 2 \
-            else ""
-        txt = font.render(field["text"] + cursor, True, UI.TEXT)
-        screen.blit(txt, (field["rect"].x + 10, field["rect"].y + 12))
+    y += 76
 
-    btn_y = start_y + len(setup_fields) * gap + 15
-    btn_dice_rect = pygame.Rect(center_x, btn_y, box_w // 2 - 10, 45)
-    btn_start_rect = pygame.Rect(center_x + box_w // 2 + 10, btn_y,
-                                 box_w // 2 - 10, 45)
+    # ── Premise (multi-line) ─────────────────────────────────────────────────
+    premise_field = setup_fields[2]
+    premise_h = 120
+    premise_field["rect"] = pygame.Rect(col_x, y + 20, col_w, premise_h)
+    lbl = font_bold.render(premise_field["label"], True, UI.TEXT_DIM)
+    hint = font_small.render("(optional — leave blank for a fully random adventure)", True, UI.TEXT_FAINT)
+    screen.blit(lbl, (col_x, y))
+    screen.blit(hint, (col_x + lbl.get_width() + 8, y + 2))
+
+    is_prem_active = (setup_active_idx == 2)
+    p_col = UI.ACCENT if is_prem_active else UI.BORDER
+    pygame.draw.rect(screen, (20, 22, 28), premise_field["rect"], border_radius=5)
+    pygame.draw.rect(screen, p_col, premise_field["rect"], width=1, border_radius=5)
+
+    # Word-wrap premise text inside the box
+    prem_text_w = col_w - 20
+    prem_lines = _char_wrap(premise_field["text"], font, prem_text_w)
+    cursor_on = is_prem_active and (pygame.time.get_ticks() // CURSOR_BLINK_MS) % 2
+    if cursor_on:
+        prem_lines[-1] += "|"
+    old_clip = screen.get_clip()
+    screen.set_clip(premise_field["rect"].inflate(-2, -2))
+    for li, line in enumerate(prem_lines[:5]):
+        screen.blit(font.render(line, True, UI.TEXT),
+                    (col_x + 10, y + 26 + li * LINE_SPACING))
+    screen.set_clip(old_clip)
+
+    y += 20 + premise_h + 20
+
+    # ── Party size picker ────────────────────────────────────────────────────
+    ps_label = font_bold.render("Party Size", True, UI.TEXT_DIM)
+    screen.blit(ps_label, (col_x, y))
+
+    btn_sz = 28
+    minus_x = col_x + ps_label.get_width() + 16
+    party_minus_rect.update(minus_x, y - 2, btn_sz, btn_sz)
+    party_plus_rect.update(minus_x + btn_sz + 36, y - 2, btn_sz, btn_sz)
+
+    pygame.draw.rect(screen, UI.PANEL, party_minus_rect, border_radius=4)
+    pygame.draw.rect(screen, UI.BORDER, party_minus_rect, width=1, border_radius=4)
+    m_lbl = font_bold.render("-", True, UI.TEXT)
+    screen.blit(m_lbl, (party_minus_rect.centerx - m_lbl.get_width() // 2,
+                        party_minus_rect.centery - m_lbl.get_height() // 2))
+
+    num_surf = font_bold.render(str(party_size), True, UI.ACCENT)
+    screen.blit(num_surf, (minus_x + btn_sz + 14, y - 1))
+
+    pygame.draw.rect(screen, UI.PANEL, party_plus_rect, border_radius=4)
+    pygame.draw.rect(screen, UI.BORDER, party_plus_rect, width=1, border_radius=4)
+    p_lbl = font_bold.render("+", True, UI.TEXT)
+    screen.blit(p_lbl, (party_plus_rect.centerx - p_lbl.get_width() // 2,
+                        party_plus_rect.centery - p_lbl.get_height() // 2))
+
+    y += 42
+
+    # ── Buttons ──────────────────────────────────────────────────────────────
+    btn_w = (col_w - 12) // 2
+    btn_dice_rect = pygame.Rect(col_x, y, btn_w, 44)
+    btn_start_rect = pygame.Rect(col_x + btn_w + 12, y, btn_w, 44)
 
     pygame.draw.rect(screen, UI.PANEL, btn_dice_rect, border_radius=5)
     pygame.draw.rect(screen, UI.FATE, btn_dice_rect, width=1, border_radius=5)
@@ -441,7 +499,7 @@ def draw_setup_screen(screen, window_size, setup_fields, setup_active_idx):
     screen.blit(slbl, (btn_start_rect.centerx - slbl.get_width() // 2,
                        btn_start_rect.centery - slbl.get_height() // 2))
 
-    return btn_dice_rect, btn_start_rect
+    return btn_dice_rect, btn_start_rect, party_minus_rect, party_plus_rect
 
 
 # ---------------------------------------------------------------------------

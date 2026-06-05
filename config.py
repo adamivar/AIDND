@@ -40,7 +40,8 @@ DEFAULT_ITEM_DESCRIPTION = "A common item."
 RATIONS_DESCRIPTION = "Standard travel fare."
 
 INPUT_MAX_LENGTH = 200       # max characters in the player's input box (supports 4 wrapped lines)
-SETUP_FIELD_MAX_LENGTH = 50  # max characters per setup field
+SETUP_FIELD_MAX_LENGTH = 50  # max characters per short setup field (Genre / Tone)
+PREMISE_MAX_LENGTH = 300     # max characters in the Premise text area
 MEANINGFUL_INPUT_MIN_ALNUM = 2  # minimum alphanumeric chars to count as real input
 
 MBTI_TYPES = [
