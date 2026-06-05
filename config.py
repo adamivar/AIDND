@@ -39,7 +39,7 @@ STARTING_INVENTORY = {"Rations": 2}
 DEFAULT_ITEM_DESCRIPTION = "A common item."
 RATIONS_DESCRIPTION = "Standard travel fare."
 
-INPUT_MAX_LENGTH = 80        # max characters in the player's input box
+INPUT_MAX_LENGTH = 200       # max characters in the player's input box (supports 4 wrapped lines)
 SETUP_FIELD_MAX_LENGTH = 50  # max characters per setup field
 MEANINGFUL_INPUT_MIN_ALNUM = 2  # minimum alphanumeric chars to count as real input
 

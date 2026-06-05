@@ -117,6 +117,38 @@ _REPLACEMENTS = {
 }
 
 
+def _char_wrap(text, render_font, max_w):
+    """Break *text* into a list of lines that each fit within *max_w* pixels.
+
+    Splits on word boundaries when possible; falls back to character-level
+    splitting for long unbroken runs (e.g. the 'ggggg...' case).
+    """
+    if not text:
+        return [""]
+    words = text.split(" ")
+    lines = []
+    current = ""
+    for word in words:
+        # Try appending the next word (with a space separator if needed).
+        candidate = (current + " " + word).lstrip() if current else word
+        if render_font.size(candidate)[0] <= max_w:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            # Word itself may be longer than max_w — break it character-wise.
+            current = ""
+            for ch in word:
+                test = current + ch
+                if render_font.size(test)[0] <= max_w:
+                    current = test
+                else:
+                    lines.append(current)
+                    current = ch
+    lines.append(current)
+    return lines or [""]
+
+
 def sanitize_text(text):
     for target, sub in _REPLACEMENTS.items():
         text = text.replace(target, sub)
@@ -554,8 +586,18 @@ def draw_play_screen(screen, window_size, snap, dice_rect, sb_geom):
 
     # ---- Chronicle / chat panel (center) ----
     STATUS_H = 30
-    INPUT_H = 38
     FOOTER_H = 20
+    INPUT_LINE_H = LINE_SPACING          # 20 px per wrapped line
+    INPUT_PAD_V  = 18                    # top + bottom padding inside the box
+    INPUT_TEXT_W = CENTER_W - 46         # width available after ">" + padding
+    MAX_INPUT_LINES = 4
+
+    # Compute how many lines the current input text needs so the box can
+    # grow before we know where the chronicle panel ends.
+    _wrap_preview = _char_wrap(input_text, font, INPUT_TEXT_W)
+    _input_line_count = max(1, min(len(_wrap_preview), MAX_INPUT_LINES))
+    INPUT_H = INPUT_PAD_V + _input_line_count * INPUT_LINE_H
+
     chat_panel_h = (BOTTOM - TOP) - STATUS_H - INPUT_H - FOOTER_H - (PAD * 3)
     chat_rect = (CENTER_X, TOP, CENTER_W, chat_panel_h)
     chat_body_y = draw_panel(screen, chat_rect, "Chronicle", UI.ACCENT)
@@ -660,17 +702,27 @@ def draw_play_screen(screen, window_size, snap, dice_rect, sb_geom):
     in_border = UI.ACCENT if can_type else UI.BORDER
     pygame.draw.rect(screen, (20, 22, 28), input_rect, border_radius=5)
     pygame.draw.rect(screen, in_border, input_rect, width=1, border_radius=5)
+
+    screen.blit(font_bold.render(">", True, UI.ACCENT),
+                (CENTER_X + 14, input_y + (INPUT_H - INPUT_LINE_H) // 2))
+
     if not alive:
-        in_text, in_col = "press Ctrl+L to load a save", UI.TEXT_FAINT
+        screen.blit(font.render("press Ctrl+L to load a save", True, UI.TEXT_FAINT),
+                    (CENTER_X + 32, input_y + (INPUT_H - INPUT_LINE_H) // 2))
     elif not can_type:
-        in_text, in_col = "...", UI.TEXT_FAINT
+        screen.blit(font.render("...", True, UI.TEXT_FAINT),
+                    (CENTER_X + 32, input_y + (INPUT_H - INPUT_LINE_H) // 2))
     else:
         cursor = "|" if (pygame.time.get_ticks() // CURSOR_BLINK_MS) % 2 else ""
-        in_text, in_col = input_text + cursor, UI.TEXT
-    screen.blit(font_bold.render(">", True, UI.ACCENT),
-                (CENTER_X + 14, input_y + 11))
-    screen.blit(font.render(in_text, True, in_col),
-                (CENTER_X + 32, input_y + 11))
+        wrapped = _char_wrap(input_text, font, INPUT_TEXT_W)
+        wrapped = wrapped[:MAX_INPUT_LINES]
+        # Attach cursor to the last character of the last line
+        if wrapped:
+            wrapped[-1] = wrapped[-1] + cursor
+        line_start_y = input_y + (INPUT_H - len(wrapped) * INPUT_LINE_H) // 2
+        for li, line in enumerate(wrapped):
+            screen.blit(font.render(line, True, UI.TEXT),
+                        (CENTER_X + 32, line_start_y + li * INPUT_LINE_H))
 
     # ---- Footer (center) ----
     footer_y = input_y + INPUT_H + 6
