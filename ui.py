@@ -719,7 +719,19 @@ def draw_play_screen(screen, window_size, snap, dice_rect, sb_geom):
                            (inner_x + 3, by + 8), 3)
 
         color = UI.TEXT_FAINT if cd > 0 else UI.TEXT
-        screen.blit(font.render(ab_name, True, color), (inner_x + 14, by))
+
+        # Strip anything after " — " or " - " so descriptions embedded in
+        # the name don't overflow the panel; full desc is on hover only.
+        display_name = ab_name.split(" — ")[0].split(" - ")[0].strip()
+
+        # Clip rendering to the panel so long names never overflow.
+        name_max_w = right_w - 28   # 14px padding each side
+        name_surf = font.render(display_name, True, color)
+        clip_rect = pygame.Rect(inner_x + 14, by, name_max_w, name_surf.get_height())
+        old_clip = screen.get_clip()
+        screen.set_clip(clip_rect)
+        screen.blit(name_surf, (inner_x + 14, by))
+        screen.set_clip(old_clip)
 
         if is_active and cd > 0:
             cd_s = font_small.render(f"(Cd: {cd})", True, UI.TEXT_FAINT)
@@ -727,7 +739,7 @@ def draw_play_screen(screen, window_size, snap, dice_rect, sb_geom):
                         (right_x + right_w - 14 - cd_s.get_width(), by + 1))
 
         hover_targets.append((pygame.Rect(right_x, by, right_w, 20),
-                              ab_name,
+                              display_name,
                               ab_data.get("desc", "")
                               or "No description available."))
         by += 24
